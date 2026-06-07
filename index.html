@@ -1,0 +1,819 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Nexus OS — Production Workspace</title>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.36.1/min/vs/loader.min.js"></script>
+
+<style>
+/* PRESERVING THE EXACT VISUAL AESTHETIC */
+:root {
+  --bg: #08080A; --surface: rgba(255,255,255,0.03); --surface-2: rgba(255,255,255,0.06);
+  --border: rgba(255,255,255,0.07); --border-2: rgba(255,255,255,0.12);
+  --text: #F0EEE8; --text-2: rgba(240,238,232,0.55); --text-3: rgba(240,238,232,0.3);
+  --accent: #7C6FF7; --accent-2: #A78BFA; --green: #34D399; --amber: #FBBF24; --red: #F87171;
+  --font: 'Geist', -apple-system, sans-serif; --mono: 'Geist Mono', monospace;
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--text); font-family: var(--font); height: 100dvh; overflow: hidden; display: flex; flex-direction: column; user-select: none; }
+
+/* Aurora Background */
+#aurora { position: fixed; inset: 0; pointer-events: none; z-index: 0; overflow: hidden; }
+.aurora-orb { position: absolute; border-radius: 50%; filter: blur(120px); animation: drift linear infinite; }
+.orb-1 { width: 800px; height: 600px; background: radial-gradient(circle, rgba(124,111,247,0.15) 0%, transparent 70%); top: -20%; left: -15%; animation-duration: 25s; }
+.orb-2 { width: 600px; height: 700px; background: radial-gradient(circle, rgba(34,211,238,0.08) 0%, transparent 70%); top: -10%; right: -10%; animation-duration: 32s; animation-direction: reverse; }
+@keyframes drift { 0% { transform: translate(0, 0) scale(1); } 33% { transform: translate(60px, -40px) scale(1.05); } 66% { transform: translate(-40px, 60px) scale(0.95); } 100% { transform: translate(0, 0) scale(1); } }
+
+/* Layout Structure */
+#titlebar { height: 42px; display: flex; align-items: center; padding: 0 16px; gap: 12px; border-bottom: 1px solid var(--border); background: rgba(8,8,10,0.8); backdrop-filter: blur(20px); z-index: 100; flex-shrink: 0;}
+.logo-mark { width: 22px; height: 22px; border-radius: 6px; background: linear-gradient(135deg, var(--accent) 0%, #22D3EE 100%); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: #fff; }
+.deploy-btn { background: linear-gradient(135deg, var(--accent) 0%, #6366F1 100%); border: none; border-radius: 6px; padding: 6px 12px; font-family: var(--font); font-size: 11.5px; font-weight: 500; color: #fff; cursor: pointer; transition: 0.2s; box-shadow: 0 0 12px rgba(124,111,247,0.3); }
+
+#workspace { flex: 1; display: flex; overflow: hidden; position: relative; z-index: 10; width: 100%; }
+
+/* Desktop Split Layout */
+#sidebar { width: 260px; background: rgba(8,8,10,0.6); border-right: 1px solid var(--border); backdrop-filter: blur(20px); display: flex; flex-direction: column; flex-shrink: 0; z-index: 20; transition: transform 0.3s var(--ease); }
+#editor-area { flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative; transition: flex 0.3s var(--ease); }
+#preview-container { width: 45%; border-left: 1px solid var(--border); background: #0D0D10; display: flex; flex-direction: column; flex-shrink: 0; transition: width 0.3s var(--ease), opacity 0.3s var(--ease); overflow: hidden; }
+#preview-container.collapsed { width: 0 !important; border-left: none; opacity: 0; pointer-events: none; }
+
+/* Resizer Handle */
+#resizer { width: 4px; cursor: col-resize; background: transparent; z-index: 30; transition: background 0.2s; }
+#resizer:hover, #resizer:active { background: var(--accent); }
+#resizer.hidden { display: none; }
+
+/* UI Components */
+.sidebar-section { border-bottom: 1px solid var(--border); }
+.sidebar-heading { font-size: 10px; font-weight: 700; color: var(--text-3); text-transform: uppercase; letter-spacing: 1px; padding: 12px 14px 6px; display: flex; justify-content: space-between; align-items: center; }
+
+/* Project & File Items with Actions */
+.project-item, .file-item { display: flex; align-items: center; padding: 6px 12px; font-size: 12px; color: var(--text-2); cursor: pointer; transition: 0.2s; border-left: 2px solid transparent; position: relative; group; }
+.file-item { padding-left: 24px; gap: 8px; }
+.project-item { padding: 8px 14px; gap: 8px; }
+
+.project-item:hover, .file-item:hover { background: var(--surface); color: var(--text); }
+.project-item.active { background: rgba(124,111,247,0.05); color: var(--accent-2); border-left-color: var(--accent); font-weight: 500; }
+.file-item.active { background: rgba(124,111,247,0.1); color: var(--accent-2); border-left-color: var(--accent); }
+
+/* Action Buttons (Rename, Delete) */
+.item-actions { opacity: 0; display: flex; align-items: center; gap: 4px; margin-left: auto; transition: opacity 0.2s; }
+.project-item:hover .item-actions, .file-item:hover .item-actions { opacity: 1; }
+.action-btn { color: var(--text-3); padding: 4px; border-radius: 4px; transition: 0.2s; display: flex; align-items: center; justify-content: center; z-index: 20; }
+.action-btn:hover { color: var(--text); background: rgba(255,255,255,0.1); }
+.action-btn.delete-btn:hover { color: var(--red); background: rgba(248,113,113,0.15); }
+
+#tab-bar { height: 38px; display: flex; align-items: center; background: rgba(8,8,10,0.5); border-bottom: 1px solid var(--border); overflow-x: auto; flex-shrink: 0; justify-content: space-between; padding-right: 8px;}
+.tab-container { display: flex; height: 100%; flex: 1; }
+.tab { padding: 0 14px; height: 100%; display: flex; align-items: center; font-size: 12px; color: var(--text-3); cursor: pointer; border-right: 1px solid var(--border); position: relative; }
+.tab.active { background: rgba(8,8,10,0.8); color: var(--text); }
+.tab.active::after { content: ''; position: absolute; bottom: 0; left: 0; right: 0; height: 1px; background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+
+#editor-container { flex: 1; position: relative; background: #000; }
+#image-preview-container { display: none; position: absolute; inset: 0; background: #08080a; z-index: 10; align-items: center; justify-content: center; }
+#image-preview-container img { max-width: 80%; max-height: 80%; border-radius: 8px; box-shadow: 0 20px 40px rgba(0,0,0,0.5); border: 1px solid var(--border); }
+
+/* Advanced Preview Simulator */
+.preview-toolbar { height: 38px; border-bottom: 1px solid var(--border); display: flex; align-items: center; padding: 0 10px; gap: 6px; flex-shrink: 0; }
+.device-btn { width: 24px; height: 24px; border-radius: 4px; display: flex; align-items: center; justify-content: center; cursor: pointer; color: var(--text-3); transition: 0.2s;}
+.device-btn.active { background: rgba(124,111,247,0.15); color: var(--accent-2); }
+
+.preview-content { flex: 1; display: flex; align-items: center; justify-content: center; background: linear-gradient(135deg, #0D0D10 0%, #0A0A12 100%); padding: 20px; overflow: hidden; position: relative; }
+.device-frame { background: #fff; border-radius: 12px; overflow: hidden; box-shadow: 0 24px 60px rgba(0,0,0,0.5); transition: all 0.3s var(--ease); display: flex; flex-direction: column; }
+.device-frame.desktop { width: 100%; height: 100%; border-radius: 8px; }
+.device-frame.tablet { width: 768px; height: 1024px; max-height: 95%; max-width: 95%; border-radius: 16px; border: 12px solid #111; }
+.device-frame.mobile { width: 375px; height: 812px; border-radius: 24px; border: 14px solid #111; max-height: 95%; }
+iframe { width: 100%; height: 100%; border: none; background: #fff; flex: 1; }
+
+/* Modal & Command Palette System */
+#overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); backdrop-filter: blur(5px); z-index: 999; display: none; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.2s; }
+.modal-glass { background: rgba(18,18,22,0.95); border: 1px solid var(--border-2); border-radius: 16px; box-shadow: 0 20px 40px rgba(0,0,0,0.6); padding: 20px; width: 400px; max-width: 90vw; transform: scale(0.95); transition: transform 0.2s var(--ease); }
+#overlay.active { display: flex; opacity: 1; }
+#overlay.active .modal-glass { transform: scale(1); }
+input.glass-input { width: 100%; background: var(--surface); border: 1px solid var(--border); padding: 10px 14px; border-radius: 8px; color: var(--text); outline: none; font-family: var(--font); margin-top: 10px; }
+input.glass-input:focus { border-color: var(--accent); }
+
+/* MOBILE RESPONSIVE OVERRIDES */
+#mobile-nav { display: none; height: 50px; background: rgba(8,8,10,0.95); border-top: 1px solid var(--border); justify-content: space-around; align-items: center; z-index: 100; padding-bottom: env(safe-area-inset-bottom); flex-shrink: 0;}
+.mob-btn { display: flex; flex-direction: column; align-items: center; gap: 2px; color: var(--text-3); font-size: 10px; cursor: pointer; }
+.mob-btn.active { color: var(--accent-2); }
+
+@media (max-width: 768px) {
+  #workspace { flex-direction: column; }
+  #mobile-nav { display: flex; }
+  #resizer { display: none !important; }
+  #sidebar, #editor-area, #preview-container { width: 100% !important; height: 100%; position: absolute; inset: 0; z-index: 10; transition: transform 0.3s var(--ease); background: var(--bg); opacity: 1 !important;}
+  
+  body[data-route="files"] #sidebar { transform: translateX(0); z-index: 20; }
+  body[data-route="files"] #editor-area { transform: translateX(100%); }
+  body[data-route="files"] #preview-container { transform: translateX(200%); }
+
+  body[data-route="editor"] #sidebar { transform: translateX(-100%); }
+  body[data-route="editor"] #editor-area { transform: translateX(0); z-index: 20; }
+  body[data-route="editor"] #preview-container { transform: translateX(100%); }
+
+  body[data-route="preview"] #sidebar { transform: translateX(-200%); }
+  body[data-route="preview"] #editor-area { transform: translateX(-100%); }
+  body[data-route="preview"] #preview-container { transform: translateX(0); z-index: 20; }
+  
+  .preview-toolbar { display: none; }
+  .preview-content { padding: 0; }
+  .device-frame.mobile, .device-frame.tablet, .device-frame.desktop { width: 100%; height: 100%; border-radius: 0; border: none; max-height: none; max-width: none; }
+}
+</style>
+</head>
+<body data-route="editor">
+
+<input type="file" id="file-uploader" multiple class="hidden" onchange="ProjectSystem.handleFileUpload(event)">
+
+<div id="aurora"><div class="aurora-orb orb-1"></div><div class="aurora-orb orb-2"></div></div>
+
+<div id="overlay" onclick="ModalSystem.close(event)">
+  <div id="modal-dynamic" class="modal-glass hidden">
+    <h3 class="font-bold text-lg mb-1" id="modal-title">Modal Title</h3>
+    <p class="text-xs text-gray-400 mb-4" id="modal-desc">Modal Description.</p>
+    <input type="text" id="modal-input" class="glass-input" placeholder="" onkeydown="if(event.key==='Enter') ModalSystem.submit()">
+    <input type="hidden" id="modal-action">
+    <input type="hidden" id="modal-target-id">
+    <div class="flex justify-end gap-3 mt-6">
+      <button onclick="ModalSystem.close(true)" class="text-sm text-gray-400 hover:text-white">Cancel</button>
+      <button onclick="ModalSystem.submit()" class="px-4 py-2 bg-indigo-600 rounded-lg text-sm font-bold text-white hover:bg-indigo-500" id="modal-submit-btn">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<div id="titlebar">
+  <div class="logo-mark">N</div>
+  <span class="font-semibold text-[13px] tracking-wide">Nexus OS V9</span>
+  <div class="flex-1"></div>
+  <button id="zip-export-btn" class="text-[11px] text-gray-400 hover:text-white px-3 py-1 rounded border border-white/10 mx-2 transition" onclick="ProjectSystem.exportActiveProjectZIP()">
+    <svg class="inline-block w-3 h-3 mr-1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> <span id="zip-btn-text">Download ZIP</span>
+  </button>
+  <button class="deploy-btn flex items-center gap-2" onclick="Compiler.run()">
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg> Compile
+  </button>
+</div>
+
+<div id="workspace">
+  <div id="sidebar">
+    <div class="sidebar-section">
+        <div class="sidebar-heading">
+            <span>Projects</span>
+            <button onclick="ModalSystem.open('Create Project', 'Name your new workspace:', 'create-project', 'Create', '')" class="text-gray-400 hover:text-white"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg></button>
+        </div>
+        <div id="project-list" class="max-h-32 overflow-y-auto"></div>
+    </div>
+
+    <div class="sidebar-section flex-1 flex flex-col min-h-0">
+        <div class="sidebar-heading">
+            <span id="active-project-label" class="truncate pr-2">Files</span>
+            <div class="flex gap-2 shrink-0">
+                <button onclick="document.getElementById('file-uploader').click()" class="text-gray-400 hover:text-white" title="Import Asset"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></button>
+                <button onclick="ModalSystem.open('New File', 'e.g. script.js', 'create-file', 'Create', '')" class="text-gray-400 hover:text-white" title="New File"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg></button>
+            </div>
+        </div>
+        <div id="file-tree" class="flex-1 overflow-y-auto py-1"></div>
+    </div>
+  </div>
+
+  <div id="editor-area">
+    <div id="tab-bar">
+      <div class="tab-container" id="tab-container"></div>
+      <button class="icon-btn text-gray-400 hover:text-white mx-2 shrink-0" onclick="togglePreviewPane()" title="Toggle Preview">
+        <svg id="preview-eye-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+      </button>
+    </div>
+    
+    <div id="editor-container"></div>
+    
+    <div id="image-preview-container">
+        <img id="image-preview" src="" alt="Asset Preview">
+    </div>
+  </div>
+
+  <div id="resizer"></div>
+
+  <div id="preview-container">
+    <div class="preview-toolbar">
+      <div class="preview-url truncate mr-2" id="preview-url-bar">localhost:3000</div>
+      <div class="flex gap-1 ml-auto shrink-0">
+        <div class="device-btn active" id="btn-desktop" onclick="setDevice('desktop')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg></div>
+        <div class="device-btn" id="btn-tablet" onclick="setDevice('tablet')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M12 18h.01"/></svg></div>
+        <div class="device-btn" id="btn-mobile" onclick="setDevice('mobile')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2"/><path d="M12 18h.01"/></svg></div>
+      </div>
+    </div>
+    <div class="preview-content">
+      <div class="device-frame desktop" id="device-frame">
+        <iframe id="sandbox" sandbox="allow-scripts allow-same-origin"></iframe>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="mobile-nav">
+  <div class="mob-btn" onclick="MobileRouter.go('files', this)"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h6l2 3h10a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/></svg>Files</div>
+  <div class="mob-btn active" onclick="MobileRouter.go('editor', this)"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>Editor</div>
+  <div class="mob-btn" onclick="MobileRouter.go('preview', this)"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>Preview</div>
+</div>
+
+<script>
+/**
+ * 1. PROJECT & FILE SYSTEM (IndexedDB V9)
+ */
+const NexusDB = {
+    dbName: 'NexusOS_V9',
+    db: null,
+    activeProject: 'Default Project',
+    activeFile: null,
+
+    async init() {
+        return new Promise((resolve, reject) => {
+            const req = indexedDB.open(this.dbName, 4);
+            req.onupgradeneeded = (e) => {
+                const db = e.target.result;
+                if (!db.objectStoreNames.contains('projects')) db.createObjectStore('projects', { keyPath: 'id' });
+                if (!db.objectStoreNames.contains('files')) db.createObjectStore('files', { keyPath: 'id' });
+            };
+            req.onsuccess = (e) => { this.db = e.target.result; this.bootstrap().then(resolve); };
+        });
+    },
+
+    async bootstrap() {
+        const projects = await this.listProjects();
+        if (projects.length === 0) {
+            await this.createProject('Default Project');
+            await this.writeFile('Default Project', 'index.html', '<!DOCTYPE html>\n<html>\n<head>\n  <script src="https://cdn.tailwindcss.com"><\/script>\n</head>\n<body class="bg-slate-900 text-white flex flex-col items-center justify-center h-screen">\n  <h1 class="text-4xl font-bold">Default Project</h1>\n</body>\n</html>');
+        } else {
+            this.activeProject = projects[0].id;
+        }
+        await this.renderProjects();
+        await this.renderTree();
+    },
+
+    // --- Project Operations ---
+    async createProject(name) {
+        if(!name.trim()) return;
+        return new Promise(res => {
+            const tx = this.db.transaction('projects', 'readwrite');
+            tx.objectStore('projects').put({ id: name, created: Date.now() });
+            tx.oncomplete = async () => { 
+                await this.switchProject(name);
+                res(); 
+            };
+        });
+    },
+
+    async renameProject(oldName, newName) {
+        if(!newName || newName === oldName) return;
+        return new Promise((resolve) => {
+            const tx = this.db.transaction(['projects', 'files'], 'readwrite');
+            const pStore = tx.objectStore('projects');
+            const fStore = tx.objectStore('files');
+
+            pStore.put({ id: newName, created: Date.now() });
+
+            const req = fStore.getAll();
+            req.onsuccess = () => {
+                const allFiles = req.result || [];
+                allFiles.filter(f => f.project === oldName).forEach(f => {
+                    fStore.put({ id: this.getFileId(newName, f.name), project: newName, name: f.name, content: f.content, isBinary: f.isBinary, timestamp: f.timestamp });
+                    fStore.delete(f.id);
+                });
+                pStore.delete(oldName);
+            };
+
+            tx.oncomplete = async () => {
+                if(this.activeProject === oldName) this.activeProject = newName;
+                await this.renderProjects();
+                await this.renderTree();
+                resolve();
+            };
+        });
+    },
+
+    async deleteProject(name, e) {
+        if(e) e.stopPropagation();
+        if(!confirm(`Delete project "${name}" and all its files?`)) return;
+
+        return new Promise(async (resolve) => {
+            const files = await this.listFiles(name);
+            const tx = this.db.transaction(['projects', 'files'], 'readwrite');
+            
+            tx.objectStore('projects').delete(name);
+            files.forEach(f => tx.objectStore('files').delete(f.id));
+
+            tx.oncomplete = async () => {
+                if (this.activeProject === name) {
+                    const remaining = await this.listProjects();
+                    if (remaining.length > 0) {
+                        await this.switchProject(remaining[0].id);
+                    } else {
+                        this.activeProject = null;
+                        this.activeFile = null;
+                        if(EditorManager.instance) EditorManager.instance.setValue('');
+                        document.getElementById('project-list').innerHTML = '';
+                        document.getElementById('file-tree').innerHTML = '';
+                        document.getElementById('sandbox').srcdoc = '';
+                        document.getElementById('active-project-label').innerText = 'No Project';
+                    }
+                } else {
+                    await this.renderProjects();
+                }
+                resolve();
+            };
+        });
+    },
+
+    async listProjects() {
+        return new Promise(res => {
+            const tx = this.db.transaction('projects', 'readonly');
+            const req = tx.objectStore('projects').getAll();
+            req.onsuccess = () => res(req.result || []);
+        });
+    },
+
+    async switchProject(name) {
+        if(this.activeFile) await this.saveCurrentFile();
+        this.activeProject = name;
+        this.activeFile = null;
+        if(EditorManager.instance) EditorManager.instance.setValue('// Select a file');
+        document.getElementById('image-preview-container').style.display = 'none';
+        
+        await this.renderProjects();
+        await this.renderTree();
+        
+        const files = await this.listFiles(name);
+        const index = files.find(f => f.name === 'index.html');
+        if(index) await this.openFile(index.name);
+        Compiler.run();
+    },
+
+    async renderProjects() {
+        const projects = await this.listProjects();
+        const list = document.getElementById('project-list');
+        list.innerHTML = '';
+        projects.forEach(p => {
+            const div = document.createElement('div');
+            div.className = `project-item ${p.id === this.activeProject ? 'active' : ''}`;
+            
+            div.innerHTML = `
+                <div class="flex items-center gap-2 flex-1 min-w-0" onclick="NexusDB.switchProject('${p.id}')">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="shrink-0"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg> 
+                    <span class="truncate">${p.id}</span>
+                </div>
+                <div class="item-actions">
+                    <button onclick="ModalSystem.open('Rename Project', 'Enter new name:', 'rename-project', 'Rename', '${p.id}'); event.stopPropagation();" class="action-btn" title="Rename"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg></button>
+                    <button onclick="NexusDB.deleteProject('${p.id}', event)" class="action-btn delete-btn" title="Delete"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
+                </div>
+            `;
+            list.appendChild(div);
+        });
+        document.getElementById('active-project-label').innerText = this.activeProject || 'No Project';
+    },
+
+    // --- File Operations ---
+    getFileId(projectName, fileName) {
+        return `${projectName}:::${fileName}`;
+    },
+
+    async writeFile(projectName, fileName, content, isBinary = false) {
+        return new Promise(res => {
+            const tx = this.db.transaction('files', 'readwrite');
+            const id = this.getFileId(projectName, fileName);
+            tx.objectStore('files').put({ id, project: projectName, name: fileName, content, isBinary, timestamp: Date.now() });
+            tx.oncomplete = () => { if(projectName === this.activeProject) this.renderTree(); res(); };
+        });
+    },
+
+    async renameFile(oldName, newName) {
+        if(!newName || newName === oldName) return;
+        const fileData = await this.readFile(this.activeProject, oldName);
+        if(!fileData) return;
+
+        return new Promise((resolve) => {
+            const tx = this.db.transaction('files', 'readwrite');
+            const store = tx.objectStore('files');
+
+            store.put({
+                id: this.getFileId(this.activeProject, newName),
+                project: this.activeProject,
+                name: newName,
+                content: fileData.content,
+                isBinary: fileData.isBinary,
+                timestamp: Date.now()
+            });
+            store.delete(this.getFileId(this.activeProject, oldName));
+
+            tx.oncomplete = async () => {
+                if(this.activeFile === oldName) {
+                    this.activeFile = newName;
+                    await this.renderTabs();
+                }
+                await this.renderTree();
+                Compiler.run();
+                resolve();
+            }
+        });
+    },
+
+    async readFile(projectName, fileName) {
+        return new Promise(res => {
+            const tx = this.db.transaction('files', 'readonly');
+            const req = tx.objectStore('files').get(this.getFileId(projectName, fileName));
+            req.onsuccess = () => res(req.result);
+        });
+    },
+
+    async listFiles(projectName = this.activeProject) {
+        return new Promise(res => {
+            const tx = this.db.transaction('files', 'readonly');
+            const req = tx.objectStore('files').getAll();
+            req.onsuccess = () => {
+                const all = req.result || [];
+                const projectFiles = all.filter(f => f.project === projectName);
+                res(projectFiles.sort((a,b) => a.name.localeCompare(b.name)));
+            };
+        });
+    },
+
+    async openFile(fileName) {
+        if (this.activeFile && EditorManager.instance) await this.saveCurrentFile(); 
+        this.activeFile = fileName;
+        
+        const fileData = await this.readFile(this.activeProject, fileName);
+        const imagePreviewContainer = document.getElementById('image-preview-container');
+        
+        if(fileData && fileData.isBinary) {
+            imagePreviewContainer.style.display = 'flex';
+            document.getElementById('image-preview').src = fileData.content;
+        } else {
+            imagePreviewContainer.style.display = 'none';
+            const ext = fileName.split('.').pop();
+            const langMap = { js: 'javascript', html: 'html', css: 'css', json: 'json', ts: 'typescript' };
+            
+            if (EditorManager.instance) {
+                monaco.editor.setModelLanguage(EditorManager.instance.getModel(), langMap[ext] || 'plaintext');
+                EditorManager.instance.setValue(fileData ? fileData.content : '');
+            }
+        }
+
+        this.renderTree();
+        this.renderTabs();
+    },
+
+    async saveCurrentFile() {
+        if (this.activeFile && EditorManager.instance) {
+            const fileData = await this.readFile(this.activeProject, this.activeFile);
+            if(!fileData || !fileData.isBinary) {
+                await this.writeFile(this.activeProject, this.activeFile, EditorManager.instance.getValue());
+            }
+        }
+    },
+
+    async deleteFile(fileName, e) {
+        if(e) { e.stopPropagation(); e.preventDefault(); }
+        if(!confirm(`Delete ${fileName}?`)) return;
+        
+        return new Promise((resolve) => {
+            const tx = this.db.transaction('files', 'readwrite');
+            tx.objectStore('files').delete(this.getFileId(this.activeProject, fileName));
+            tx.oncomplete = async () => { 
+                if(this.activeFile === fileName) {
+                    const files = await this.listFiles(this.activeProject);
+                    if(files.length > 0) {
+                        this.openFile(files[0].name);
+                    } else { 
+                        this.activeFile = null; 
+                        if(EditorManager.instance) EditorManager.instance.setValue(''); 
+                        document.getElementById('image-preview-container').style.display = 'none';
+                    }
+                }
+                this.renderTree(); 
+                this.renderTabs();
+                Compiler.run(); 
+                resolve(); 
+            };
+        });
+    },
+
+    async renderTree() {
+        const files = await this.listFiles(this.activeProject);
+        const tree = document.getElementById('file-tree');
+        tree.innerHTML = '';
+        files.forEach(f => {
+            const ext = f.name.split('.').pop().toLowerCase();
+            const isImage = ['png','jpg','jpeg','gif','webp','svg'].includes(ext);
+            const icon = isImage ? '🖼️' : ext === 'html' ? '🌐' : ext === 'css' ? '🎨' : ext === 'js' ? '⚡' : '📄';
+            
+            const div = document.createElement('div');
+            div.className = `file-item ${f.name === this.activeFile ? 'active' : ''}`;
+            
+            div.innerHTML = `
+                <div class="flex items-center gap-2 flex-1 min-w-0" onclick="NexusDB.openFile('${f.name}')">
+                    <span class="shrink-0">${icon}</span> <span class="truncate">${f.name}</span>
+                </div>
+                <div class="item-actions">
+                    <button onclick="ModalSystem.open('Rename File', 'Enter new name:', 'rename-file', 'Rename', '${f.name}'); event.stopPropagation();" class="action-btn" title="Rename"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg></button>
+                    <button onclick="NexusDB.deleteFile('${f.name}', event)" class="action-btn delete-btn" title="Delete"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
+                </div>
+            `;
+            // Mobile routing helper
+            div.querySelector('.flex-1').addEventListener('click', () => {
+                if(window.innerWidth <= 768) MobileRouter.go('editor', document.querySelectorAll('.mob-btn')[1]);
+            });
+            tree.appendChild(div);
+        });
+    },
+
+    async renderTabs() {
+        const tabBar = document.getElementById('tab-container');
+        tabBar.innerHTML = '';
+        if(this.activeFile) {
+            const div = document.createElement('div');
+            div.className = 'tab active';
+            div.innerText = this.activeFile;
+            tabBar.appendChild(div);
+        }
+    }
+};
+
+/**
+ * 2. DYNAMIC MODAL SYSTEM (Create & Rename)
+ */
+const ModalSystem = {
+    open(title, desc, action, btnText, targetId = '') {
+        document.getElementById('overlay').classList.add('active');
+        document.getElementById('modal-dynamic').classList.remove('hidden');
+        document.getElementById('modal-title').innerText = title;
+        document.getElementById('modal-desc').innerText = desc;
+        document.getElementById('modal-action').value = action;
+        document.getElementById('modal-target-id').value = targetId;
+        document.getElementById('modal-submit-btn').innerText = btnText;
+        
+        const input = document.getElementById('modal-input');
+        input.value = targetId; 
+        setTimeout(() => {
+            input.focus();
+            if(targetId) input.select(); 
+        }, 50);
+    },
+    close(force = false) {
+        if(force || event.target.id === 'overlay') {
+            document.getElementById('overlay').classList.remove('active');
+            document.querySelectorAll('.modal-glass').forEach(m => m.classList.add('hidden'));
+        }
+    },
+    async submit() {
+        const input = document.getElementById('modal-input');
+        const val = input.value.trim();
+        const action = document.getElementById('modal-action').value;
+        const targetId = document.getElementById('modal-target-id').value;
+        
+        if(!val) return;
+
+        if(action === 'create-project') {
+            await NexusDB.createProject(val);
+        } else if (action === 'create-file') {
+            await NexusDB.writeFile(NexusDB.activeProject, val, '');
+            NexusDB.openFile(val);
+        } else if (action === 'rename-project') {
+            await NexusDB.renameProject(targetId, val);
+        } else if (action === 'rename-file') {
+            await NexusDB.renameFile(targetId, val);
+        }
+        
+        this.close(true);
+    }
+};
+
+/**
+ * 3. ASSET IMPORT & ZIP EXPORT ENGINE
+ */
+const ProjectSystem = {
+    async handleFileUpload(event) {
+        const files = event.target.files;
+        if(!files || files.length === 0) return;
+
+        const uploadPromises = Array.from(files).map(file => {
+            return new Promise(resolve => {
+                const reader = new FileReader();
+                // Check MIME type or extension for images
+                const isImage = file.type.startsWith('image/') || /\.(png|jpe?g|gif|svg|webp)$/i.test(file.name);
+                
+                reader.onload = async (e) => {
+                    await NexusDB.writeFile(NexusDB.activeProject, file.name, e.target.result, isImage);
+                    resolve();
+                };
+
+                if (isImage) reader.readAsDataURL(file); 
+                else reader.readAsText(file);
+            });
+        });
+
+        // Wait for all files to be read and saved to DB before compiling
+        await Promise.all(uploadPromises);
+        event.target.value = '';
+        Compiler.run(); 
+    },
+
+    async exportActiveProjectZIP() {
+        const btnText = document.getElementById('zip-btn-text');
+        const originalText = btnText.innerText;
+        btnText.innerText = "Zipping...";
+
+        try {
+            if (typeof JSZip === 'undefined') throw new Error("JSZip library not loaded.");
+
+            const zip = new JSZip();
+            const files = await NexusDB.listFiles(NexusDB.activeProject);
+            
+            if(!files || files.length === 0) {
+                alert("Project is empty. Add files before exporting.");
+                btnText.innerText = originalText;
+                return;
+            }
+
+            const folderName = NexusDB.activeProject.replace(/[^a-zA-Z0-9-]/g, '_');
+            const projectFolder = zip.folder(folderName);
+
+            files.forEach(f => {
+                let content = f.content || '';
+                if (f.isBinary && typeof content === 'string' && content.indexOf('base64,') !== -1) {
+                    content = content.substring(content.indexOf('base64,') + 7);
+                    projectFolder.file(f.name, content, { base64: true });
+                } else {
+                    projectFolder.file(f.name, content);
+                }
+            });
+            
+            const contentBlob = await zip.generateAsync({ type: "blob" });
+            
+            const url = window.URL.createObjectURL(contentBlob);
+            const a = document.createElement("a");
+            a.style.display = "none";
+            a.href = url;
+            a.download = `${folderName}-export.zip`;
+            
+            document.body.appendChild(a);
+            a.click();
+            
+            setTimeout(() => {
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(url);
+                btnText.innerText = originalText;
+            }, 500);
+
+        } catch (error) {
+            console.error("ZIP Export Error:", error);
+            alert("Failed to create ZIP. See console.");
+            btnText.innerText = "Export Failed";
+            setTimeout(() => btnText.innerText = originalText, 2000);
+        }
+    }
+};
+
+/**
+ * 4. MONACO EDITOR
+ */
+const EditorManager = {
+    instance: null,
+    init() {
+        require.config({ paths: { 'vs': 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.36.1/min/vs' }});
+        require(['vs/editor/editor.main'], () => {
+            monaco.editor.defineTheme('nexus-dark', {
+                base: 'vs-dark', inherit: true,
+                rules: [{ background: '000000' }],
+                colors: { 'editor.background': '#000000', 'editor.lineHighlightBackground': '#111111' }
+            });
+
+            this.instance = monaco.editor.create(document.getElementById('editor-container'), {
+                value: '', theme: 'nexus-dark', automaticLayout: true, minimap: { enabled: false },
+                fontSize: 14, fontFamily: "'Geist Mono', monospace", padding: { top: 16 },
+                wordWrap: "on", formatOnPaste: true, suggestOnTriggerCharacters: true
+            });
+
+            let timeout;
+            this.instance.onDidChangeModelContent(() => {
+                clearTimeout(timeout);
+                timeout = setTimeout(() => {
+                    NexusDB.saveCurrentFile();
+                    Compiler.run();
+                }, 800);
+            });
+
+            this.instance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+                NexusDB.saveCurrentFile(); Compiler.run();
+            });
+        });
+    }
+};
+
+/**
+ * 5. COMPILATION ENGINE (ROBUST ASSET INJECTION)
+ */
+const Compiler = {
+    async run() {
+        if(!NexusDB.activeProject) return;
+        const iframe = document.getElementById('sandbox');
+        const urlBar = document.getElementById('preview-url-bar');
+        urlBar.innerText = `localhost:3000 / ${NexusDB.activeProject}`;
+
+        const allFiles = await NexusDB.listFiles(NexusDB.activeProject);
+        
+        const htmlFile = allFiles.find(f => f.name.endsWith('.html') || f.name === 'index.html');
+        const cssFile = allFiles.find(f => f.name.endsWith('.css'));
+        const jsFile = allFiles.find(f => f.name.endsWith('.js'));
+
+        let bundledHTML = htmlFile ? htmlFile.content : '<body style="color:white;font-family:sans-serif;text-align:center;margin-top:20vh;">No HTML file found.</body>';
+        
+        // Smart Regex Resolution for Images
+        allFiles.filter(f => f.isBinary).forEach(asset => {
+            // Escape filename for regex
+            const safeName = asset.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            
+            // Replaces HTML: src="asset.png", src='./asset.png', src='asset.png'
+            const htmlRegex = new RegExp(`(["'])(?:\\.\\/)?${safeName}\\1`, 'g');
+            bundledHTML = bundledHTML.replace(htmlRegex, `$1${asset.content}$1`);
+
+            // Replaces CSS: url(asset.png), url('./asset.png'), url("asset.png")
+            if(cssFile) {
+                const cssRegex = new RegExp(`url\\(\\s*(["']?)(?:\\.\\/)?${safeName}\\1\\s*\\)`, 'g');
+                cssFile.content = cssFile.content.replace(cssRegex, `url("${asset.content}")`);
+            }
+        });
+
+        if(htmlFile) {
+            if(cssFile) bundledHTML = bundledHTML.replace('</head>', `<style>${cssFile.content}</style></head>`);
+            if(jsFile) bundledHTML = bundledHTML.replace('</body>', `<script>${jsFile.content}<\/script></body>`);
+        }
+
+        iframe.srcdoc = bundledHTML;
+    }
+};
+
+/**
+ * 6. UI CONTROLS
+ */
+let isPreviewVisible = true;
+function togglePreviewPane() {
+    const previewContainer = document.getElementById('preview-container');
+    const resizer = document.getElementById('resizer');
+    const icon = document.getElementById('preview-eye-icon');
+    
+    isPreviewVisible = !isPreviewVisible;
+    
+    if(isPreviewVisible) {
+        previewContainer.classList.remove('collapsed');
+        resizer.classList.remove('hidden');
+        icon.innerHTML = '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>'; 
+    } else {
+        previewContainer.classList.add('collapsed');
+        resizer.classList.add('hidden');
+        icon.innerHTML = '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line>'; 
+    }
+    setTimeout(() => { if(EditorManager.instance) EditorManager.instance.layout(); }, 300);
+}
+
+const resizer = document.getElementById('resizer');
+const previewContainer = document.getElementById('preview-container');
+let isResizing = false;
+
+resizer.addEventListener('mousedown', () => { isResizing = true; document.body.style.cursor = 'col-resize'; });
+document.addEventListener('mousemove', (e) => {
+    if (!isResizing || window.innerWidth <= 768) return;
+    const newPreviewWidth = window.innerWidth - e.clientX;
+    if (newPreviewWidth > 300 && e.clientX > 300) previewContainer.style.width = `${newPreviewWidth}px`;
+});
+document.addEventListener('mouseup', () => { isResizing = false; document.body.style.cursor = ''; });
+
+const MobileRouter = {
+    go(route, btnEl) {
+        document.body.setAttribute('data-route', route);
+        document.querySelectorAll('.mob-btn').forEach(b => b.classList.remove('active'));
+        if(btnEl) btnEl.classList.add('active');
+        if(route === 'editor' && EditorManager.instance) setTimeout(() => EditorManager.instance.layout(), 300);
+    }
+};
+
+function setDevice(type) {
+    if(window.innerWidth <= 768) return; 
+    ['desktop', 'tablet', 'mobile'].forEach(t => document.getElementById(`btn-${t}`).classList.remove('active'));
+    document.getElementById(`btn-${type}`).classList.add('active');
+    document.getElementById('device-frame').className = `device-frame ${type}`;
+}
+
+// Boot
+window.addEventListener('DOMContentLoaded', async () => {
+    await NexusDB.init();
+    EditorManager.init();
+});
+</script>
+
+</body>
+</html>
