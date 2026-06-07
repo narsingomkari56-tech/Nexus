@@ -43,7 +43,7 @@ jobs:
           npm install @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6
           
           # 5. Initialize the Android wrapper
-          npx cap init "Nexus App" "com.nexus.app" --web-dir web_build --confirm
+          npx cap init "Nexus App" "com.nexus.app" --web-dir web_build 
           npx cap add android
 
       - name: Compile APK
